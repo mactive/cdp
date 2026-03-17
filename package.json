@@ -1,0 +1,13 @@
+{
+  "name": "gemini-image-downloader",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Download images from Gemini using CDP",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^22.0.0"
+  }
+}
