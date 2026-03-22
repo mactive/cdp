@@ -77,8 +77,11 @@ async function main() {
     await page.goto(pageUrl, { waitUntil: 'networkidle2' });
     await sleep(3000);
 
-    // 获取页面标题，用于命名文件
-    const rawTitle = await page.evaluate(() => document.title);
+    // 获取页面标题，优先从对话标题元素取，回退到 document.title
+    const rawTitle = await page.evaluate(() => {
+      const el = document.querySelector('span[data-test-id="conversation-title"]');
+      return (el && el.textContent.trim()) || document.title;
+    });
     const title = sanitizeFilename(rawTitle || 'gemini');
     console.log(`页面标题: ${title}\n`);
 
