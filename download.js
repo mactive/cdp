@@ -27,6 +27,7 @@ async function sleep(ms) {
 
 function detectExt(filePath) {
   const buf = fs.readFileSync(filePath);
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return '.png';
   if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return '.jpg';
   if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return '.gif';
   if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) return '.webp';
@@ -55,9 +56,52 @@ function waitForNewFile(downloadDir, before, timeoutMs = 30000) {
   });
 }
 
+function finalizeDownloadedFile(filePath, baseName) {
+  const ext = path.extname(filePath) || detectExt(filePath);
+  let finalName = `${baseName}${ext}`;
+  let finalPath = path.join(CONFIG.downloadDir, finalName);
+  let dedupe = 2;
+
+  while (fs.existsSync(finalPath) && path.resolve(finalPath) !== path.resolve(filePath)) {
+    finalName = `${baseName}_${dedupe}${ext}`;
+    finalPath = path.join(CONFIG.downloadDir, finalName);
+    dedupe++;
+  }
+
+  if (path.resolve(finalPath) !== path.resolve(filePath)) {
+    fs.renameSync(filePath, finalPath);
+  }
+
+  return finalName;
+}
+
+function normalizeUnnamedDownloads() {
+  const files = fs.readdirSync(CONFIG.downloadDir);
+
+  for (const file of files) {
+    if (path.extname(file) || file.endsWith('.crdownload') || file.endsWith('.tmp')) {
+      continue;
+    }
+
+    const filePath = path.join(CONFIG.downloadDir, file);
+    if (!fs.statSync(filePath).isFile()) continue;
+
+    try {
+      const finalName = finalizeDownloadedFile(filePath, file);
+      if (finalName !== file) {
+        console.log(`已整理历史下载文件: ${file} -> ${finalName}`);
+      }
+    } catch (error) {
+      console.log(`跳过无法识别的历史文件: ${file} (${error.message})`);
+    }
+  }
+}
+
 async function main() {
   let browser;
   try {
+    normalizeUnnamedDownloads();
+
     browser = await puppeteer.connect({
       browserURL: CONFIG.debuggerUrl,
       defaultViewport: null
@@ -156,26 +200,20 @@ async function main() {
           await btnHandle.evaluate(el => el.click());
         }
         try {
-          await page.waitForFunction(() => {
-            const el = document.querySelector('.mat-mdc-snack-bar-label');
-            if (!el) return false;
-            const t = el.textContent || '';
-            return t.includes('正在下载') || t.includes('Downloading') || t.includes('下载');
-          }, { timeout: 10000 });
+          try {
+            await page.waitForFunction(() => {
+              const el = document.querySelector('.mat-mdc-snack-bar-label');
+              if (!el) return false;
+              const t = el.textContent || '';
+              return t.includes('正在下载') || t.includes('Downloading') || t.includes('下载');
+            }, { timeout: 10000 });
+          } catch {
+            console.log('  未观察到“开始下载”提示，继续检查文件...');
+          }
 
-          await page.waitForFunction(() => {
-            const el = document.querySelector('.mat-mdc-snack-bar-label');
-            if (!el) return false;
-            const t = el.textContent || '';
-            return t.includes('已下载') || t.includes('Downloaded') || t.includes('Complete');
-          }, { timeout: 60000 });
-
-          // 等待新文件出现并重命名
-          const newFile = await waitForNewFile(CONFIG.downloadDir, beforeFiles);
-          const ext = detectExt(newFile);
-          const finalName = `${title}_${i + 1}${ext}`;
-          const finalPath = path.join(CONFIG.downloadDir, finalName);
-          fs.renameSync(newFile, finalPath);
+          // 以文件实际落盘作为成功依据，不再依赖“已下载”提示条。
+          const newFile = await waitForNewFile(CONFIG.downloadDir, beforeFiles, 65000);
+          const finalName = finalizeDownloadedFile(newFile, `${title}_${i + 1}`);
 
           success = true;
           downloadCount++;
